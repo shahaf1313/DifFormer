@@ -4,9 +4,14 @@ Train a diffusion model on images.
 
 import argparse
 import os
+import sys
 
 def main():
     args = create_argparser().parse_args()
+    command_line = ''
+    for s in sys.argv:
+        command_line += s + ' '
+    args.command_line = command_line
     # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     # os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpus)[1:-1].strip(' ').replace(" ", "")
     from guided_diffusion import dist_util, logger
@@ -14,9 +19,12 @@ def main():
     from guided_diffusion.resample import create_named_schedule_sampler
     from guided_diffusion.script_util import create_model_and_diffusion
     from guided_diffusion.train_util import TrainLoop
-    dist_util.setup_dist()
-    logger.configure()
-
+    import datetime
+    dist_util.setup_dist(args.gpus)
+    logger.configure(dir=os.path.join('/home/shahaf/guided_diffusion/runs',datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') + '-GPU' + str(args.gpus[0])))
+    logger.log('configuration of current run:')
+    for argument in vars(args):
+        logger.log(argument + ': ' + str(getattr(args, argument)))
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())

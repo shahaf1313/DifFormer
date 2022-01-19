@@ -4,6 +4,8 @@ import inspect
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
+from .network_swinir import SwinIR
+from torch import nn
 
 NUM_CLASSES = 1000
 
@@ -96,24 +98,51 @@ def create_model_and_diffusion(
     use_fp16,
     use_new_attention_order,
 ):
-    model = create_model(
-        image_size,
-        num_channels,
-        num_res_blocks,
-        channel_mult=channel_mult,
-        learn_sigma=learn_sigma,
-        class_cond=class_cond,
-        use_checkpoint=use_checkpoint,
-        attention_resolutions=attention_resolutions,
-        num_heads=num_heads,
-        num_head_channels=num_head_channels,
-        num_heads_upsample=num_heads_upsample,
-        use_scale_shift_norm=use_scale_shift_norm,
-        dropout=dropout,
-        resblock_updown=resblock_updown,
-        use_fp16=use_fp16,
-        use_new_attention_order=use_new_attention_order,
-    )
+
+    upscale = 1
+    window_size = 8
+    height = (1024 // upscale // window_size + 1) * window_size
+    width = (720 // upscale // window_size + 1) * window_size
+    model = SwinIR(image_size=image_size,
+                   patch_size=1, # default
+                   embed_dim=96, # default
+                   depths= [6, 6, 6, 6], # default
+                   num_heads= [6, 6, 6, 6], #default - may be intersting to play with
+                   window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
+                   mlp_ratio = 4, # followed by the configuration of SwinIR denoiser. default -4
+                   qkv_bais = True, # default
+                   qk_scale= None, # default
+                   drop_rate=0., # default
+                   attn_drop_rate=0., # default
+                   drop_path_rate=0.1, # default
+                   norm_layer= nn.LayerNorm, # default
+                   ape=False, # default - interesting to change and check
+                   patch_norm=True, # default
+                   use_checkpoint= False, # default
+                   upscale=1, # set as denoiser
+                   img_range=1., #image comes (-1,1) range and converted onto (0,1) in the forward pass
+                   upsampler='', # no upsampler - because we use it as a denoiser
+                   resi_connection='1conv', # default
+                   learn_sigma=learn_sigma # I added - chooses wheter to output 3 or 6 channels (don't know what it means, just saw it on the regular UNET implementation
+                   )
+    # model = create_model(
+    #     image_size, #
+    #     num_channels, #
+    #     num_res_blocks, #
+    #     channel_mult=channel_mult, #
+    #     learn_sigma=learn_sigma, #
+    #     class_cond=class_cond, #
+    #     use_checkpoint=use_checkpoint, #
+    #     attention_resolutions=attention_resolutions, #
+    #     num_heads=num_heads, #
+    #     num_head_channels=num_head_channels, #
+    #     num_heads_upsample=num_heads_upsample, #
+    #     use_scale_shift_norm=use_scale_shift_norm, #
+    #     dropout=dropout, #
+    #     resblock_updown=resblock_updown, #
+    #     use_fp16=use_fp16, #
+    #     use_new_attention_order=use_new_attention_order, #
+    # )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
         learn_sigma=learn_sigma,
@@ -126,7 +155,7 @@ def create_model_and_diffusion(
     )
     return model, diffusion
 
-
+# todo: replace with transformer - SWINIR
 def create_model(
     image_size,
     num_channels,
@@ -224,7 +253,7 @@ def create_classifier_and_diffusion(
     )
     return classifier, diffusion
 
-
+# todo: replace with transformer - Top ranked classifier transformer
 def create_classifier(
     image_size,
     classifier_use_fp16,
