@@ -41,30 +41,61 @@ def classifier_defaults():
         classifier_pool="attention",
     )
 
-
 def model_and_diffusion_defaults():
     """
     Defaults for image training.
     """
     res = dict(
         image_size=64,
-        num_channels=128,
-        num_res_blocks=2,
-        num_heads=4,
-        num_heads_upsample=-1,
-        num_head_channels=-1,
-        attention_resolutions="16,8",
-        channel_mult="",
-        dropout=0.0,
-        class_cond=False,
-        use_checkpoint=False,
-        use_scale_shift_norm=True,
-        resblock_updown=False,
-        use_fp16=False,
-        use_new_attention_order=False,
+        patch_size=1, # default
+        embed_dim=96, # default
+        depths= [6, 6, 6, 6], # default
+        num_heads= [6, 6, 6, 6], #default - may be intersting to play with
+        window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
+        mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
+        qkv_bais = True, # default
+        qk_scale= None, # default
+        drop_rate=0., # default
+        attn_drop_rate=0., # default
+        drop_path_rate=0.1, # default
+        norm_layer= nn.LayerNorm, # default
+        ape=False, # default - interesting to change and check
+        patch_norm=True, # default
+        use_checkpoint= False, # default
+        upscale=1, # set as denoiser
+        img_range=1., #image comes (-1,1) range and converted onto (0,1) in the forward pass
+        upsampler='', # no upsampler - because we use it as a denoiser
+        resi_connection='1conv', # default
+        learn_sigma=True, # I added - chooses wheter to output 3 or 6 channels
+        class_cond=True,
+        num_classes=1000, #Number of classes in the current dataset
     )
     res.update(diffusion_defaults())
     return res
+
+# def model_and_diffusion_defaults():
+#     """
+#     Defaults for image training.
+#     """
+#     res = dict(
+#         image_size=64,
+#         num_channels=128,
+#         num_res_blocks=2,
+#         num_heads=4,
+#         num_heads_upsample=-1,
+#         num_head_channels=-1,
+#         attention_resolutions="16,8",
+#         channel_mult="",
+#         dropout=0.0,
+#         class_cond=False,
+#         use_checkpoint=False,
+#         use_scale_shift_norm=True,
+#         resblock_updown=False,
+#         use_fp16=False,
+#         use_new_attention_order=False,
+#     )
+#     res.update(diffusion_defaults())
+#     return res
 
 
 def classifier_and_diffusion_defaults():
@@ -74,17 +105,7 @@ def classifier_and_diffusion_defaults():
 
 
 def create_model_and_diffusion(
-    image_size,
-    class_cond,
-    learn_sigma,
-    num_channels,
-    num_res_blocks,
-    channel_mult,
-    num_heads,
-    num_head_channels,
-    num_heads_upsample,
-    attention_resolutions,
-    dropout,
+    # Diffusion Parameters:
     diffusion_steps,
     noise_schedule,
     timestep_respacing,
@@ -92,38 +113,54 @@ def create_model_and_diffusion(
     predict_xstart,
     rescale_timesteps,
     rescale_learned_sigmas,
-    use_checkpoint,
-    use_scale_shift_norm,
-    resblock_updown,
-    use_fp16,
-    use_new_attention_order,
-):
+    # Model Parameters:
+    image_size,
+    patch_size=1, # default
+    embed_dim=96, # default
+    depths= [6, 6, 6, 6], # default
+    num_heads= [6, 6, 6, 6], #default - may be intersting to play with
+    window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
+    mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
+    qkv_bais = True, # default
+    qk_scale= None, # default
+    drop_rate=0., # default
+    attn_drop_rate=0., # default
+    drop_path_rate=0.1, # default
+    norm_layer= nn.LayerNorm, # default
+    ape=False, # default - interesting to change and check
+    patch_norm=True, # default
+    use_checkpoint= False, # default
+    upscale=1, # set as denoiser
+    img_range=1., #image comes (-1,1) range and converted onto (0,1) in the forward pass
+    upsampler='', # no upsampler - because we use it as a denoiser
+    resi_connection='1conv', # default
+    learn_sigma=True, # I added - chooses whether to output 3 or 6 channels (don't k
+    class_cond=True, # Future use: implement unconditional model
+    num_classes=NUM_CLASSES, #Number of classes in the current dataset
 
-    upscale = 1
-    window_size = 8
-    height = (1024 // upscale // window_size + 1) * window_size
-    width = (720 // upscale // window_size + 1) * window_size
+):
     model = SwinIR(image_size=image_size,
-                   patch_size=1, # default
-                   embed_dim=96, # default
-                   depths= [6, 6, 6, 6], # default
-                   num_heads= [6, 6, 6, 6], #default - may be intersting to play with
-                   window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
-                   mlp_ratio = 4, # followed by the configuration of SwinIR denoiser. default -4
-                   qkv_bais = True, # default
-                   qk_scale= None, # default
-                   drop_rate=0., # default
-                   attn_drop_rate=0., # default
-                   drop_path_rate=0.1, # default
-                   norm_layer= nn.LayerNorm, # default
-                   ape=False, # default - interesting to change and check
-                   patch_norm=True, # default
-                   use_checkpoint= False, # default
-                   upscale=1, # set as denoiser
-                   img_range=1., #image comes (-1,1) range and converted onto (0,1) in the forward pass
-                   upsampler='', # no upsampler - because we use it as a denoiser
-                   resi_connection='1conv', # default
-                   learn_sigma=learn_sigma # I added - chooses wheter to output 3 or 6 channels (don't know what it means, just saw it on the regular UNET implementation
+                   patch_size=patch_size,
+                   embed_dim=embed_dim,
+                   depths= depths,
+                   num_heads= num_heads,
+                   window_size= window_size,
+                   mlp_ratio = mlp_ratio,
+                   qkv_bais = qkv_bais,
+                   qk_scale= qk_scale,
+                   drop_rate=drop_rate,
+                   attn_drop_rate=attn_drop_rate,
+                   drop_path_rate=drop_path_rate,
+                   norm_layer= norm_layer,
+                   ape=ape,
+                   patch_norm=patch_norm,
+                   use_checkpoint= use_checkpoint,
+                   upscale=upscale,
+                   img_range=img_range,
+                   upsampler=upsampler,
+                   resi_connection=resi_connection,
+                   learn_sigma=learn_sigma,
+                   num_classes=num_classes
                    )
     # model = create_model(
     #     image_size, #

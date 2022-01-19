@@ -849,7 +849,7 @@ class SwinIR(nn.Module):
             #todo: I changed from:
             # x = x + self.conv_last(res)
             # to: (because of the stupid "3 to 6" layers in the "learn sigma"
-            x = self.conv_last(res)
+            x = x.repeat(1, 2, 1, 1) + self.conv_last(res)
 
         # todo: I commented out
         # x = x / self.img_range #+ self.mean
