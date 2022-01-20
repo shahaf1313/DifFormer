@@ -19,7 +19,8 @@ def main():
         command_line += s + ' '
     args.command_line = command_line
     dist_util.setup_dist(args.gpus)
-    logger.configure(dir=os.path.join('/home/shahaf/guided_diffusion/runs',datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') + '-GPU' + str(args.gpus[0])))
+    log_root_dir = '/home/shahaf/guided_diffusion/%sruns' % ('debug_' if args.debug else '')
+    logger.configure(dir=os.path.join(log_root_dir,datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') + '-GPU' + str(args.gpus[0])))
     logger.log('configuration of current run:')
     for argument in vars(args):
         logger.log(argument + ': ' + str(getattr(args, argument)))
@@ -28,6 +29,7 @@ def main():
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
+    logger.log(model)
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
 
     logger.log("creating data loader...")
@@ -143,6 +145,7 @@ def create_argparser():
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     parser.add_argument("--gpus", type=int, nargs='+', help="String that contains available GPUs to use", default=[0])
+    parser.add_argument("--debug", default=False, action='store_true')
     return parser
 
 

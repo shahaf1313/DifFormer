@@ -49,9 +49,9 @@ def model_and_diffusion_defaults():
         image_size=64,
         patch_size=1, # default
         embed_dim=96, # default
-        depths= [6, 6, 6, 6], # default
-        num_heads= [6, 6, 6, 6], #default - may be intersting to play with
-        window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
+        depths= [6, 6, 6, 6], # default - lightweight definition
+        num_heads= [6, 6, 6, 6], #default - lightweight definition
+        window_size= 8, # changed to 8 because the is not divisible by 7 (64x64 for now). default - 7
         mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
         qkv_bais = True, # default
         qk_scale= None, # default
