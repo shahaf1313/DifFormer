@@ -5,6 +5,9 @@ process towards more realistic images.
 
 import argparse
 import os
+import sys
+import datetime
+import time
 
 import numpy as np
 import torch as th
@@ -15,8 +18,10 @@ from guided_diffusion import dist_util, logger
 from guided_diffusion.script_util import (
     NUM_CLASSES,
     model_and_diffusion_defaults,
+    model_and_diffusion_defaults_transformer,
     classifier_defaults,
     create_model_and_diffusion,
+    create_model_and_diffusion_transformer,
     create_classifier,
     add_dict_to_argparser,
     args_to_dict,
@@ -25,19 +30,30 @@ from guided_diffusion.script_util import (
 
 def main():
     args = create_argparser().parse_args()
-
-    dist_util.setup_dist()
-    logger.configure()
-
+    command_line = ''
+    for s in sys.argv:
+        command_line += s + ' '
+    args.command_line = command_line
+    dist_util.setup_dist(args.gpus)
+    log_root_dir = '/home/shahaf/guided_diffusion/%sruns' % ('debug_' if args.debug else '')
+    logger.configure(dir=os.path.join(log_root_dir,datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') + '-GPU' + str(args.gpus[0])))
+    logger.log('configuration of current run:')
+    for argument in vars(args):
+        logger.log(argument + ': ' + str(getattr(args, argument)))
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
-    )
+    if args.use_transformer:
+        model, diffusion = create_model_and_diffusion_transformer(
+            **args_to_dict(args, model_and_diffusion_defaults_transformer().keys())
+        )
+    else:
+        model, diffusion = create_model_and_diffusion(
+            **args_to_dict(args, model_and_diffusion_defaults().keys())
+        )
     model.load_state_dict(
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
     model.to(dist_util.dev())
-    if args.use_fp16:
+    if args.use_fp16 and not args.use_tranformer:
         model.convert_to_fp16()
     model.eval()
 
@@ -67,6 +83,8 @@ def main():
     logger.log("sampling...")
     all_images = []
     all_labels = []
+
+    start = time.time()
     while len(all_images) * args.batch_size < args.num_samples:
         model_kwargs = {}
         classes = th.randint(
@@ -94,7 +112,9 @@ def main():
         gathered_labels = [th.zeros_like(classes) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_labels, classes)
         all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
-        logger.log(f"created {len(all_images) * args.batch_size} samples")
+        elapsed = time.time() - start
+        logger.log(f"created {len(all_images) * args.batch_size} samples. estimated time per image: {elapsed/args.batch_size:.2f} sec.")
+        start = time.time()
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
@@ -121,9 +141,13 @@ def create_argparser():
         classifier_scale=1.0,
     )
     defaults.update(model_and_diffusion_defaults())
+    defaults.update(model_and_diffusion_defaults_transformer())
     defaults.update(classifier_defaults())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
+    parser.add_argument("--gpus", type=int, nargs='+', help="String that contains available GPUs to use", default=[0])
+    parser.add_argument("--debug", default=False, action='store_true')
+    parser.add_argument("--use_transformer", default=False, action='store_true')
     return parser
 
 

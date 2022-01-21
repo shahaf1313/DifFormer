@@ -25,7 +25,6 @@ def diffusion_defaults():
         rescale_learned_sigmas=False,
     )
 
-
 def classifier_defaults():
     """
     Defaults for classifier models.
@@ -42,6 +41,35 @@ def classifier_defaults():
     )
 
 def model_and_diffusion_defaults():
+    """
+    Defaults for image training.
+    """
+    res = dict(
+        image_size=64,
+        num_channels=128,
+        num_res_blocks=2,
+        num_heads=4,
+        num_heads_upsample=-1,
+        num_head_channels=-1,
+        attention_resolutions="16,8",
+        channel_mult="",
+        dropout=0.0,
+        class_cond=False,
+        use_checkpoint=False,
+        use_scale_shift_norm=True,
+        resblock_updown=False,
+        use_fp16=False,
+        use_new_attention_order=False,
+    )
+    res.update(diffusion_defaults())
+    return res
+
+def classifier_and_diffusion_defaults():
+    res = classifier_defaults()
+    res.update(diffusion_defaults())
+    return res
+
+def model_and_diffusion_defaults_transformer():
     """
     Defaults for image training.
     """
@@ -73,38 +101,7 @@ def model_and_diffusion_defaults():
     res.update(diffusion_defaults())
     return res
 
-# def model_and_diffusion_defaults():
-#     """
-#     Defaults for image training.
-#     """
-#     res = dict(
-#         image_size=64,
-#         num_channels=128,
-#         num_res_blocks=2,
-#         num_heads=4,
-#         num_heads_upsample=-1,
-#         num_head_channels=-1,
-#         attention_resolutions="16,8",
-#         channel_mult="",
-#         dropout=0.0,
-#         class_cond=False,
-#         use_checkpoint=False,
-#         use_scale_shift_norm=True,
-#         resblock_updown=False,
-#         use_fp16=False,
-#         use_new_attention_order=False,
-#     )
-#     res.update(diffusion_defaults())
-#     return res
-
-
-def classifier_and_diffusion_defaults():
-    res = classifier_defaults()
-    res.update(diffusion_defaults())
-    return res
-
-
-def create_model_and_diffusion(
+def create_model_and_diffusion_transformer(
     # Diffusion Parameters:
     diffusion_steps,
     noise_schedule,
@@ -162,24 +159,7 @@ def create_model_and_diffusion(
                    learn_sigma=learn_sigma,
                    num_classes=num_classes
                    )
-    # model = create_model(
-    #     image_size, #
-    #     num_channels, #
-    #     num_res_blocks, #
-    #     channel_mult=channel_mult, #
-    #     learn_sigma=learn_sigma, #
-    #     class_cond=class_cond, #
-    #     use_checkpoint=use_checkpoint, #
-    #     attention_resolutions=attention_resolutions, #
-    #     num_heads=num_heads, #
-    #     num_head_channels=num_head_channels, #
-    #     num_heads_upsample=num_heads_upsample, #
-    #     use_scale_shift_norm=use_scale_shift_norm, #
-    #     dropout=dropout, #
-    #     resblock_updown=resblock_updown, #
-    #     use_fp16=use_fp16, #
-    #     use_new_attention_order=use_new_attention_order, #
-    # )
+
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
         learn_sigma=learn_sigma,
@@ -192,7 +172,63 @@ def create_model_and_diffusion(
     )
     return model, diffusion
 
-# todo: replace with transformer - SWINIR
+def create_model_and_diffusion(
+        image_size,
+        class_cond,
+        learn_sigma,
+        num_channels,
+        num_res_blocks,
+        channel_mult,
+        num_heads,
+        num_head_channels,
+        num_heads_upsample,
+        attention_resolutions,
+        dropout,
+        diffusion_steps,
+        noise_schedule,
+        timestep_respacing,
+        use_kl,
+        predict_xstart,
+        rescale_timesteps,
+        rescale_learned_sigmas,
+        use_checkpoint,
+        use_scale_shift_norm,
+        resblock_updown,
+        use_fp16,
+        use_new_attention_order,
+):
+    model = create_model(
+        image_size,
+        num_channels,
+        num_res_blocks,
+        channel_mult=channel_mult,
+        learn_sigma=learn_sigma,
+        class_cond=class_cond,
+        use_checkpoint=use_checkpoint,
+        attention_resolutions=attention_resolutions,
+        num_heads=num_heads,
+        num_head_channels=num_head_channels,
+        num_heads_upsample=num_heads_upsample,
+        use_scale_shift_norm=use_scale_shift_norm,
+        dropout=dropout,
+        resblock_updown=resblock_updown,
+        use_fp16=use_fp16,
+        use_new_attention_order=use_new_attention_order,
+    )
+    diffusion = create_gaussian_diffusion(
+        steps=diffusion_steps,
+        learn_sigma=learn_sigma,
+        noise_schedule=noise_schedule,
+        use_kl=use_kl,
+        predict_xstart=predict_xstart,
+        rescale_timesteps=rescale_timesteps,
+        rescale_learned_sigmas=rescale_learned_sigmas,
+        timestep_respacing=timestep_respacing,
+    )
+    return model, diffusion
+
+
+# todo: replace with transformer - some
 def create_model(
     image_size,
     num_channels,
