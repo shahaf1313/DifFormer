@@ -53,7 +53,7 @@ def main():
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
     model.to(dist_util.dev())
-    if args.use_fp16 and not args.use_tranformer:
+    if args.use_fp16 and not args.use_transformer:
         model.convert_to_fp16()
     model.eval()
 
@@ -149,6 +149,7 @@ def create_argparser():
     parser.add_argument("--debug", default=False, action='store_true')
     parser.add_argument("--use_transformer", default=False, action='store_true')
     return parser
+
 
 
 if __name__ == "__main__":

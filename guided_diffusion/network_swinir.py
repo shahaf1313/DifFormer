@@ -31,6 +31,35 @@ class Mlp(nn.Module):
         return x
 
 
+class AdaptiveLayerNormalization(nn.Module):
+    def __init__(self, channels):
+        super(AdaptiveLayerNormalization, self).__init__()
+        self.norm = nn.LayerNorm(channels, elementwise_affine=False)
+        self.shared = nn.Sequential(
+            nn.Linear(channels, channels),
+            nn.GELU()
+        )
+        self.scale = nn.Sequential(
+            nn.Linear(channels, channels),
+            nn.GELU()
+        )
+        self.shift = nn.Sequential(
+            nn.Linear(channels, channels),
+            nn.GELU()
+        )
+
+    def forward(self, input, embeddings):
+        norm = self.norm(input)
+        shared = self.shared(embeddings)
+        scale = self.scale(shared)
+        shift = self.shift(shared)
+        while len(scale.shape) != len(norm.shape):
+            scale = scale.unsqueeze(1)
+            shift = shift.unsqueeze(1)
+        output = norm * (1 + scale) + shift
+        return output
+
+
 def window_partition(x, window_size):
     """
     Args:
@@ -237,13 +266,13 @@ class SwinTransformerBlock(nn.Module):
 
         return attn_mask
 
-    def forward(self, x, x_size):
+    def forward(self, x, x_size, emb):
         H, W = x_size
         B, L, C = x.shape
         # assert L == H * W, "input feature has wrong size"
 
         shortcut = x
-        x = self.norm1(x)
+        x = self.norm1(x, emb)
         x = x.view(B, H, W, C)
 
         # cyclic shift
@@ -275,7 +304,7 @@ class SwinTransformerBlock(nn.Module):
 
         # FFN
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        x = x + self.drop_path(self.mlp(self.norm2(x, emb)))
 
         return x
 
@@ -314,7 +343,7 @@ class PatchMerging(nn.Module):
         self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
         self.norm = norm_layer(4 * dim)
 
-    def forward(self, x):
+    def forward(self, x, emb):
         """
         x: B, H*W, C
         """
@@ -332,7 +361,7 @@ class PatchMerging(nn.Module):
         x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
         x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
 
-        x = self.norm(x)
+        x = self.norm(x, emb)
         x = self.reduction(x)
 
         return x
@@ -395,12 +424,12 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
-    def forward(self, x, x_size):
+    def forward(self, x, x_size, emb):
         for blk in self.blocks:
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x, x_size)
+                x = checkpoint.checkpoint(blk, x, x_size, emb)
             else:
-                x = blk(x, x_size)
+                x = blk(x, x_size, emb)
         if self.downsample is not None:
             x = self.downsample(x)
         return x
@@ -448,7 +477,7 @@ class RSTB(nn.Module):
 
         self.dim = dim
         self.input_resolution = input_resolution
-        self.embeddings_mlp = Mlp(in_features=2*dim, hidden_features=dim, out_features=dim)
+        # self.embeddings_mlp = Mlp(in_features=2*dim, hidden_features=dim, out_features=dim)
         self.residual_group = BasicLayer(dim=dim,
                                          input_resolution=input_resolution,
                                          depth=depth,
@@ -480,9 +509,16 @@ class RSTB(nn.Module):
             norm_layer=None)
 
     def forward(self, x, x_size, emb):
-        return self.patch_embed(self.conv(self.patch_unembed(
-            self.residual_group(x, x_size) +
-            self.embeddings_mlp(emb).unsqueeze(1), x_size))) + x
+        # return self.patch_embed(self.conv(self.patch_unembed(
+        #     self.residual_group(x, x_size) +
+        #     self.embeddings_mlp(emb).unsqueeze(1), x_size))) + x
+        res = x
+        z = self.residual_group(x, x_size, emb)
+        z = self.patch_unembed(z, x_size, emb)
+        z = self.conv(z)
+        z = self.patch_embed(z, emb)
+        z = z + res
+        return z
 
     def flops(self):
         flops = 0
@@ -524,10 +560,10 @@ class PatchEmbed(nn.Module):
         else:
             self.norm = None
 
-    def forward(self, x):
+    def forward(self, x, emb):
         x = x.flatten(2).transpose(1, 2)  # B Ph*Pw C
         if self.norm is not None:
-            x = self.norm(x)
+            x = self.norm(x, emb)
         return x
 
     def flops(self):
@@ -562,7 +598,7 @@ class PatchUnEmbed(nn.Module):
         self.in_chans = in_chans
         self.embed_dim = embed_dim
 
-    def forward(self, x, x_size):
+    def forward(self, x, x_size, emb):
         B, HW, C = x.shape
         x = x.transpose(1, 2).view(B, self.embed_dim, x_size[0], x_size[1])  # B Ph*Pw C
         return x
@@ -646,7 +682,7 @@ class SwinIR(nn.Module):
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
     """
 
-    def __init__(self, img_size=64, patch_size=1, in_chans=3,
+    def __init__(self, img_size, patch_size=1, in_chans=3,
                  embed_dim=96, depths=[6, 6, 6, 6], num_heads=[6, 6, 6, 6],
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
@@ -667,10 +703,8 @@ class SwinIR(nn.Module):
         self.upscale = upscale
         self.upsampler = upsampler
         self.window_size = window_size
-
-        self.time_mlp  = Mlp(embed_dim)
-        self.label_mlp = Mlp(embed_dim)
         self.label_embedding = nn.Embedding(num_classes, embed_dim)
+        self.emb_mlp = Mlp(2*embed_dim, embed_dim, embed_dim)
 
         #####################################################################################################
         ################################### 1, shallow feature extraction ###################################
@@ -777,8 +811,10 @@ class SwinIR(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
+            if hasattr(m, 'bias') and m.bias != None:
+                nn.init.constant_(m.bias, 0)
+            if hasattr(m, 'weight') and m.weight != None:
+                nn.init.constant_(m.weight, 1.0)
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -797,7 +833,7 @@ class SwinIR(nn.Module):
 
     def forward_features(self, x, emb):
         x_size = (x.shape[2], x.shape[3])
-        x = self.patch_embed(x)
+        x = self.patch_embed(x, emb)
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
@@ -805,8 +841,8 @@ class SwinIR(nn.Module):
         for layer in self.layers:
             x = layer(x, x_size, emb)
 
-        x = self.norm(x)  # B L C
-        x = self.patch_unembed(x, x_size)
+        x = self.norm(x, emb)  # B L C
+        x = self.patch_unembed(x, x_size, emb)
 
         return x
 
@@ -816,9 +852,10 @@ class SwinIR(nn.Module):
 
         H, W = x.shape[2:]
         x = self.check_image_size(x)
-        t = self.time_mlp(timestep_embedding(t, self.embed_dim))
-        y = self.label_mlp(self.label_embedding(y))
+        t = timestep_embedding(t, self.embed_dim)
+        y = self.label_embedding(y)
         emb = torch.cat((t,y), 1)
+        emb = self.emb_mlp(emb)
         self.mean = self.mean.type_as(x)
         # todo: I commented out
         # x = (x - self.mean) * self.img_range

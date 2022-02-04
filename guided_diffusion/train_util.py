@@ -1,7 +1,7 @@
 import copy
 import functools
 import os
-
+from torch.optim import lr_scheduler
 import blobfile as bf
 import torch as th
 import torch.distributed as dist
@@ -75,6 +75,8 @@ class TrainLoop:
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
+        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[800000, 1200000, 1400000, 1500000, 1600000], gamma=0.5)
+
         if self.resume_step:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
@@ -165,6 +167,7 @@ class TrainLoop:
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
             self.step += 1
+
         # Save the last checkpoint if it wasn't already saved.
         if (self.step - 1) % self.save_interval != 0:
             self.save()
@@ -174,6 +177,7 @@ class TrainLoop:
         took_step = self.mp_trainer.optimize(self.opt)
         if took_step:
             self._update_ema()
+            self.scheduler.step()
         self._anneal_lr()
         self.log_step()
 

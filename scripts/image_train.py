@@ -9,7 +9,9 @@ from guided_diffusion import dist_util, logger
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion.resample import create_named_schedule_sampler
 from guided_diffusion.script_util import (
+    create_model_and_diffusion,
     create_model_and_diffusion_transformer,
+    model_and_diffusion_defaults,
     model_and_diffusion_defaults_transformer,
     args_to_dict, add_dict_to_argparser)
 from guided_diffusion.train_util import TrainLoop
@@ -28,13 +30,18 @@ def main():
     for argument in vars(args):
         logger.log(argument + ': ' + str(getattr(args, argument)))
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion_transformer(
-        **args_to_dict(args, model_and_diffusion_defaults_transformer().keys())
-    )
+    if args.use_transformer:
+        model, diffusion = create_model_and_diffusion_transformer(
+            **args_to_dict(args, model_and_diffusion_defaults_transformer().keys())
+        )
+    else:
+        model, diffusion = create_model_and_diffusion(
+            **args_to_dict(args, model_and_diffusion_defaults().keys())
+        )
+    print('Params number in model: {}'.format(sum(map(lambda x: x.numel(), model.parameters()))))
     model.to(dist_util.dev())
     logger.log(model)
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
-
     logger.log("creating data loader...")
     data = load_data(
         data_dir=args.data_dir,
@@ -78,11 +85,13 @@ def create_argparser():
         use_fp16=False,
         fp16_scale_growth=1e-3
     )
+    defaults.update(model_and_diffusion_defaults())
     defaults.update(model_and_diffusion_defaults_transformer())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     parser.add_argument("--gpus", type=int, nargs='+', help="String that contains available GPUs to use", default=[0])
     parser.add_argument("--debug", default=False, action='store_true')
+    parser.add_argument("--use_transformer", default=False, action='store_true')
     return parser
 
 

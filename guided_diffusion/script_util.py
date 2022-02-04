@@ -4,7 +4,7 @@ import inspect
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
-from .network_swinir import SwinIR
+from .network_swinir import SwinIR, AdaptiveLayerNormalization
 from torch import nn
 
 NUM_CLASSES = 1000
@@ -74,11 +74,11 @@ def model_and_diffusion_defaults_transformer():
     Defaults for image training.
     """
     res = dict(
-        image_size=64,
+        image_size_swin=64,
         patch_size=1, # default
-        embed_dim=96, # default
-        depths= [6, 6, 6, 6], # default - lightweight definition
-        num_heads= [6, 6, 6, 6], #default - lightweight definition
+        embed_dim=180, # default
+        depths= [6, 6, 6, 6, 6, 6], # default - lightweight definition
+        num_heads_swin= [6, 6, 6, 6, 6, 6], #default - lightweight definition
         window_size= 8, # changed to 8 because the is not divisible by 7 (64x64 for now). default - 7
         mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
         qkv_bais = True, # default
@@ -86,7 +86,7 @@ def model_and_diffusion_defaults_transformer():
         drop_rate=0., # default
         attn_drop_rate=0., # default
         drop_path_rate=0.1, # default
-        norm_layer= nn.LayerNorm, # default
+        norm_layer= AdaptiveLayerNormalization, # default - nn.LayerNorm
         ape=False, # default - interesting to change and check
         patch_norm=True, # default
         use_checkpoint= False, # default
@@ -95,8 +95,8 @@ def model_and_diffusion_defaults_transformer():
         upsampler='', # no upsampler - because we use it as a denoiser
         resi_connection='1conv', # default
         learn_sigma=True, # I added - chooses wheter to output 3 or 6 channels
-        class_cond=True,
-        num_classes=1000, #Number of classes in the current dataset
+        class_cond_swin=True,
+        num_classes_swin=1000, #Number of classes in the current dataset
     )
     res.update(diffusion_defaults())
     return res
@@ -111,11 +111,11 @@ def create_model_and_diffusion_transformer(
     rescale_timesteps,
     rescale_learned_sigmas,
     # Model Parameters:
-    image_size,
+    image_size_swin,
     patch_size=1, # default
     embed_dim=96, # default
     depths= [6, 6, 6, 6], # default
-    num_heads= [6, 6, 6, 6], #default - may be intersting to play with
+    num_heads_swin= [6, 6, 6, 6], #default - may be intersting to play with
     window_size= 4, # changed to 4 because the image is small (64x64 for now). default - 7
     mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
     qkv_bais = True, # default
@@ -132,15 +132,15 @@ def create_model_and_diffusion_transformer(
     upsampler='', # no upsampler - because we use it as a denoiser
     resi_connection='1conv', # default
     learn_sigma=True, # I added - chooses whether to output 3 or 6 channels (don't k
-    class_cond=True, # Future use: implement unconditional model
-    num_classes=NUM_CLASSES, #Number of classes in the current dataset
+    class_cond_swin=True, # Future use: implement unconditional model
+    num_classes_swin=NUM_CLASSES, #Number of classes in the current dataset
 
 ):
-    model = SwinIR(image_size=image_size,
+    model = SwinIR(img_size=image_size_swin,
                    patch_size=patch_size,
                    embed_dim=embed_dim,
                    depths= depths,
-                   num_heads= num_heads,
+                   num_heads= num_heads_swin,
                    window_size= window_size,
                    mlp_ratio = mlp_ratio,
                    qkv_bais = qkv_bais,
@@ -157,7 +157,7 @@ def create_model_and_diffusion_transformer(
                    upsampler=upsampler,
                    resi_connection=resi_connection,
                    learn_sigma=learn_sigma,
-                   num_classes=num_classes
+                   num_classes=num_classes_swin
                    )
 
     diffusion = create_gaussian_diffusion(
