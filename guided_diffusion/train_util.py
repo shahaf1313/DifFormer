@@ -84,6 +84,10 @@ class TrainLoop:
             self.ema_params = [
                 self._load_ema_parameters(rate) for rate in self.ema_rate
             ]
+            print('before set: ', self.scheduler.last_epoch)
+            self.scheduler.last_epoch = self.resume_step
+            print('after set: ', self.scheduler.last_epoch)
+
         else:
             self.ema_params = [
                 copy.deepcopy(self.mp_trainer.master_params)
