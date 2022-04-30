@@ -11,6 +11,92 @@ import torch.utils.checkpoint as checkpoint
 from .nn import timestep_embedding
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
+class VGG_ENC(nn.Module):
+    def __init__(self):
+        super().__init__()
+        image_encoder = nn.Sequential(
+            nn.Conv2d(3, 3, (1, 1)),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(3, 64, (3, 3)),
+            nn.ReLU(),  # relu1-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(64, 64, (3, 3)),
+            nn.ReLU(),  # relu1-2
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(64, 128, (3, 3)),
+            nn.ReLU(),  # relu2-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(128, 128, (3, 3)),
+            nn.ReLU(),  # relu2-2
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(128, 256, (3, 3)),
+            nn.ReLU(),  # relu3-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 256, (3, 3)),
+            nn.ReLU(),  # relu3-4
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(256, 512, (3, 3)),
+            nn.ReLU(),  # relu4-1, this is the last layer used
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu4-4
+            nn.MaxPool2d((2, 2), (2, 2), (0, 0), ceil_mode=True),
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-1
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-2
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU(),  # relu5-3
+            nn.ReflectionPad2d((1, 1, 1, 1)),
+            nn.Conv2d(512, 512, (3, 3)),
+            nn.ReLU()  # relu5-4
+        )
+
+        vgg_weight_path = ''
+        # image_encoder.load_state_dict(torch.load(opt.image_encoder_path))
+        enc_layers = list(image_encoder.children())
+        # enc_1 = nn.DataParallel(nn.Sequential(*enc_layers[:4]).to(opt.gpu_ids[0]), opt.gpu_ids)
+        # enc_2 = nn.DataParallel(nn.Sequential(*enc_layers[4:11]).to(opt.gpu_ids[0]), opt.gpu_ids)
+        # enc_3 = nn.DataParallel(nn.Sequential(*enc_layers[11:18]).to(opt.gpu_ids[0]), opt.gpu_ids)
+        # enc_4 = nn.DataParallel(nn.Sequential(*enc_layers[18:31]).to(opt.gpu_ids[0]), opt.gpu_ids)
+        # enc_5 = nn.DataParallel(nn.Sequential(*enc_layers[31:44]).to(opt.gpu_ids[0]), opt.gpu_ids)
+        enc_1 = nn.Sequential(*enc_layers[:4])
+        enc_2 = nn.Sequential(*enc_layers[4:11])
+        enc_3 = nn.Sequential(*enc_layers[11:18])
+        enc_4 = nn.Sequential(*enc_layers[18:31])
+        enc_5 = nn.Sequential(*enc_layers[31:44])
+        self.image_encoder_layers = [enc_1, enc_2, enc_3, enc_4, enc_5]
+
+    def encode_with_intermediate(self, input_img):
+            results = [input_img]
+            for i in range(5):
+                func = self.image_encoder_layers[i]
+                results.append(func(results[-1]))
+            return results[1:]
+    
+    def forward(self,input):
+        output = self.encode_with_intermediate(input)
+        return output
+
+
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -59,6 +145,67 @@ class AdaptiveLayerNormalization(nn.Module):
         output = norm * (1 + scale) + shift
         return output
 
+class AdaAttN(nn.Module):
+
+    def __init__(self, in_planes, max_sample=256 * 256, key_planes=None):
+        super(AdaAttN, self).__init__()
+        if key_planes is None:
+            key_planes = 3 * in_planes
+        
+        
+        self.shared_enc1 = nn.Sequential(
+            nn.Conv1d(in_planes, in_planes, 1),
+            nn.ReLU()
+        )
+        self.shared_enc2 = nn.Sequential(
+            nn.Conv1d(in_planes, in_planes, 1),
+            nn.ReLU()
+        )
+        self.shared_enc3 = nn.Sequential(
+            nn.Conv1d(in_planes, in_planes, 1),
+            nn.ReLU()
+        )
+        self.f = nn.Conv1d(key_planes, key_planes, 1)
+        self.g = nn.Conv1d(key_planes, key_planes, 1)
+        self.h = nn.Conv1d(in_planes, in_planes, 1)
+        self.sm = nn.Softmax(dim=-1)
+        self.max_sample = max_sample
+        self.norm = nn.LayerNorm([in_planes,4096], elementwise_affine=False)
+        self.norm_key1 = nn.LayerNorm([key_planes,4096], elementwise_affine=False)
+        self.norm_key2 = nn.LayerNorm([key_planes,1], elementwise_affine=False)
+
+    def forward(self, content, style):
+    
+        content = content.permute(0,2,1).contiguous()
+        style = style.unsqueeze(dim=-1)
+
+        # Small encoder to extract shallow and deep features
+        content1 = self.shared_enc1(content)
+        content2 = self.shared_enc1(content1)
+        f_c = self.shared_enc1(content2)
+        
+        style1 = self.shared_enc1(style)
+        style2 = self.shared_enc1(style1)
+        f_s = self.shared_enc1(style2)
+
+        f_cx = torch.cat((content1, content2, f_c),dim=1)
+        f_sx = torch.cat((style1, style2, f_s),dim = 1)
+
+
+        Q = self.f(self.norm_key1(f_cx))
+        K = self.g(self.norm_key2 (f_sx))
+        V = self.h(f_s)                                                     # V shape: C x HsWs
+        
+        # To Check- 
+        A = self.sm(torch.bmm(Q.transpose(1,2).contiguous(), K))            # A shape: HcWc x HsWs 
+        A_trans = A.transpose(1,2).contiguous()
+        mean = torch.bmm(V, A_trans)                                        # M shape: C x HcWc
+        # TO Chek- the relu can teturn all values 0 
+        std = torch.sqrt(torch.relu(torch.bmm(V**2, A_trans) - mean ** 2))  # S shape: C x HcWc
+       
+        calc = std * self.norm(content) + mean
+
+        return calc.permute(0,2,1).contiguous()
 
 def window_partition(x, window_size):
     """
@@ -705,6 +852,7 @@ class SwinIR(nn.Module):
         self.window_size = window_size
         self.label_embedding = nn.Embedding(num_classes, embed_dim)
         self.emb_mlp = Mlp(2*embed_dim, embed_dim, embed_dim)
+        self.vgg_enc = VGG_ENC()
 
         #####################################################################################################
         ################################### 1, shallow feature extraction ###################################
@@ -852,6 +1000,7 @@ class SwinIR(nn.Module):
 
         H, W = x.shape[2:]
         x = self.check_image_size(x)
+        img_fiture = self.vgg_enc(x)
         t = timestep_embedding(t, self.embed_dim)
         y = self.label_embedding(y)
         emb = torch.cat((t,y), 1)

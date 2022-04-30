@@ -35,7 +35,7 @@ def main():
         command_line += s + ' '
     args.command_line = command_line
     dist_util.setup_dist(args.gpus)
-    log_root_dir = '/home/shahaf/guided_diffusion/%ssamples' % ('debug_' if args.debug else '')
+    log_root_dir = '/home/amit/DifFormer/%ssamples' % ('debug_' if args.debug else '')
     logger.configure(dir=os.path.join(log_root_dir,datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') + '-GPU' + str(args.gpus[0])))
     logger.log('configuration of current run:')
     for argument in vars(args):
