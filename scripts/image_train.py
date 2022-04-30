@@ -38,7 +38,10 @@ def main():
         model, diffusion = create_model_and_diffusion(
             **args_to_dict(args, model_and_diffusion_defaults().keys())
         )
-    print('Params number in model: {}'.format(sum(map(lambda x: x.numel(), model.parameters()))))
+    print('All Params number in model: {}'.format(sum(map(lambda x: x.numel(), model.parameters()))))
+    print('Train Params number in model: {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
+
+    print ()
     model.to(dist_util.dev())
     logger.log(model)
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)

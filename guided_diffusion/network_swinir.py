@@ -12,9 +12,12 @@ from .nn import timestep_embedding
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 class VGG_ENC(nn.Module):
-    def __init__(self):
+    def __init__(self, img_size = 64, embed_dim = 96):
         super().__init__()
-        image_encoder = nn.Sequential(
+        self.img_size = img_size
+        self.embed_dim = embed_dim
+        
+        self.image_encoder = nn.Sequential(
             nn.Conv2d(3, 3, (1, 1)),
             nn.ReflectionPad2d((1, 1, 1, 1)),
             nn.Conv2d(3, 64, (3, 3)),
@@ -69,21 +72,38 @@ class VGG_ENC(nn.Module):
             nn.Conv2d(512, 512, (3, 3)),
             nn.ReLU()  # relu5-4
         )
+        for layer in self.image_encoder:
+            for param in layer.parameters():
+                param.requires_grad = False
 
-        vgg_weight_path = ''
-        # image_encoder.load_state_dict(torch.load(opt.image_encoder_path))
-        enc_layers = list(image_encoder.children())
+        vgg_weight_path = '/data1/Amit/guided_diffusion/vgg_w.pth'
+        self.image_encoder.load_state_dict(torch.load(vgg_weight_path))
+        
+        self.enc_layers = list(self.image_encoder.children())
+        for layer in self.enc_layers:
+            for param in layer.parameters():
+                param.requires_grad = False
         # enc_1 = nn.DataParallel(nn.Sequential(*enc_layers[:4]).to(opt.gpu_ids[0]), opt.gpu_ids)
         # enc_2 = nn.DataParallel(nn.Sequential(*enc_layers[4:11]).to(opt.gpu_ids[0]), opt.gpu_ids)
         # enc_3 = nn.DataParallel(nn.Sequential(*enc_layers[11:18]).to(opt.gpu_ids[0]), opt.gpu_ids)
         # enc_4 = nn.DataParallel(nn.Sequential(*enc_layers[18:31]).to(opt.gpu_ids[0]), opt.gpu_ids)
         # enc_5 = nn.DataParallel(nn.Sequential(*enc_layers[31:44]).to(opt.gpu_ids[0]), opt.gpu_ids)
-        enc_1 = nn.Sequential(*enc_layers[:4])
-        enc_2 = nn.Sequential(*enc_layers[4:11])
-        enc_3 = nn.Sequential(*enc_layers[11:18])
-        enc_4 = nn.Sequential(*enc_layers[18:31])
-        enc_5 = nn.Sequential(*enc_layers[31:44])
-        self.image_encoder_layers = [enc_1, enc_2, enc_3, enc_4, enc_5]
+        self.enc_1 = nn.Sequential(*self.enc_layers[:4])
+        self.enc_2 = nn.Sequential(*self.enc_layers[4:11])
+        self.enc_3 = nn.Sequential(*self.enc_layers[11:18])
+        self.enc_4 = nn.Sequential(*self.enc_layers[18:31])
+        self.enc_5 = nn.Sequential(*self.enc_layers[31:44])
+        self.image_encoder_layers = [self.enc_1, self.enc_2, self.enc_3, self.enc_4, self.enc_5]
+        
+        for layer in self.image_encoder_layers:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+
+        self.conv_vgg1 = nn.Conv2d(1472, img_size * img_size, 3, 1, 1) # TO do Change gard coded 
+        self.conv_vgg2 = nn.Conv1d(16, embed_dim, 1) # TO do Change gard coded 
+
+
 
     def encode_with_intermediate(self, input_img):
             results = [input_img]
@@ -92,8 +112,39 @@ class VGG_ENC(nn.Module):
                 results.append(func(results[-1]))
             return results[1:]
     
+    def calc_mean_std(self, feat, eps=1e-5):
+        # eps is a small value added to the variance to avoid divide-by-zero.
+        size = feat.size()
+        assert (len(size) == 4)
+        N, C = size[:2]
+        feat_var = feat.view(N, C, -1).var(dim=2) + eps
+        feat_std = feat_var.sqrt().view(N, C, 1, 1)
+        feat_mean = feat.view(N, C, -1).mean(dim=2).view(N, C, 1, 1)
+        return feat_mean, feat_std
+
+    def mean_variance_norm(self, feat):
+        size = feat.size()
+        mean, std = self.calc_mean_std(feat)
+        normalized_feat = (feat - mean.expand(size)) / std.expand(size)
+        return normalized_feat
+    
+    # @staticmethod
+    def get_key(self, feats, last_layer_idx, need_shallow=True):
+        if need_shallow and last_layer_idx > 0:
+            results = []
+            _, _, h, w = feats[last_layer_idx].shape
+            for i in range(last_layer_idx):
+                results.append(self.mean_variance_norm(nn.functional.interpolate(feats[i], (h, w))))
+            results.append(self.mean_variance_norm(feats[last_layer_idx]))
+            return torch.cat(results, dim=1)
+        else:
+            return self.mean_variance_norm(feats[last_layer_idx])
+
     def forward(self,input):
-        output = self.encode_with_intermediate(input)
+        feat = self.encode_with_intermediate(input)
+        output = self.get_key(feats = feat, last_layer_idx= 4, need_shallow = True)
+        output = self.conv_vgg1(output).view(output.shape[0], self.img_size*self.img_size, -1).permute(0,2,1)
+        output = self.conv_vgg2(output)
         return output
 
 
@@ -146,7 +197,6 @@ class AdaptiveLayerNormalization(nn.Module):
         return output
 
 class AdaAttN(nn.Module):
-
     def __init__(self, in_planes, max_sample=256 * 256, key_planes=None):
         super(AdaAttN, self).__init__()
         if key_planes is None:
@@ -195,6 +245,55 @@ class AdaAttN(nn.Module):
         Q = self.f(self.norm_key1(f_cx))
         K = self.g(self.norm_key2 (f_sx))
         V = self.h(f_s)                                                     # V shape: C x HsWs
+        
+        # To Check- 
+        A = self.sm(torch.bmm(Q.transpose(1,2).contiguous(), K))            # A shape: HcWc x HsWs 
+        A_trans = A.transpose(1,2).contiguous()
+        mean = torch.bmm(V, A_trans)                                        # M shape: C x HcWc
+        # TO Chek- the relu can teturn all values 0 
+        std = torch.sqrt(torch.relu(torch.bmm(V**2, A_trans) - mean ** 2))  # S shape: C x HcWc
+       
+        calc = std * self.norm(content) + mean
+
+        return calc.permute(0,2,1).contiguous()
+
+class AdaAttN_v2(nn.Module):
+    def __init__(self, in_planes, max_sample=256 * 256, key_planes=None):
+        super(AdaAttN_v2, self).__init__()
+        if key_planes is None:
+            key_planes = in_planes
+        
+        self.f = nn.Conv1d(key_planes, key_planes, 1)
+        self.g = nn.Conv1d(key_planes, key_planes, 1)
+        self.h = nn.Conv1d(in_planes, in_planes, 1)
+        self.sm = nn.Softmax(dim=-1)
+        self.max_sample = max_sample
+        self.norm = nn.LayerNorm([in_planes,4096], elementwise_affine=False)
+        self.norm_key1 = nn.LayerNorm([key_planes,4096], elementwise_affine=False)
+        self.norm_key2 = nn.LayerNorm([key_planes,1], elementwise_affine=False)
+
+    def forward(self, content, style,f_cx,f_sx):
+    
+        content = content.permute(0,2,1).contiguous()
+        style = style.unsqueeze(dim=-1)
+        f_sx = f_sx.unsqueeze(dim=-1)
+
+        # Small encoder to extract shallow and deep features
+        # content1 = self.shared_enc1(content)
+        # content2 = self.shared_enc1(content1)
+        # f_c = self.shared_enc1(content2)
+        
+        # style1 = self.shared_enc1(style)
+        # style2 = self.shared_enc1(style1)
+        # f_s = self.shared_enc1(style2)
+
+        # f_cx = torch.cat((content1, content2, f_c),dim=1)
+        # f_sx = torch.cat((style1, style2, f_s),dim = 1)
+
+
+        Q = self.f(self.norm_key1(f_cx))
+        K = self.g(self.norm_key2 (f_sx))
+        V = self.h(style)                                                     # V shape: C x HsWs
         
         # To Check- 
         A = self.sm(torch.bmm(Q.transpose(1,2).contiguous(), K))            # A shape: HcWc x HsWs 
@@ -413,13 +512,13 @@ class SwinTransformerBlock(nn.Module):
 
         return attn_mask
 
-    def forward(self, x, x_size, emb):
+    def forward(self, x, x_size, emb, img_feature, emb_feature):
         H, W = x_size
         B, L, C = x.shape
         # assert L == H * W, "input feature has wrong size"
 
         shortcut = x
-        x = self.norm1(x, emb)
+        x = self.norm1(x, emb,img_feature, emb_feature)
         x = x.view(B, H, W, C)
 
         # cyclic shift
@@ -451,7 +550,7 @@ class SwinTransformerBlock(nn.Module):
 
         # FFN
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x, emb)))
+        x = x + self.drop_path(self.mlp(self.norm2(x, emb,img_feature, emb_feature)))
 
         return x
 
@@ -490,7 +589,7 @@ class PatchMerging(nn.Module):
         self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
         self.norm = norm_layer(4 * dim)
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, img_feature = None, emb_feature = None):
         """
         x: B, H*W, C
         """
@@ -508,7 +607,7 @@ class PatchMerging(nn.Module):
         x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
         x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
 
-        x = self.norm(x, emb)
+        x = self.norm(x, emb, img_feature, emb_feature)
         x = self.reduction(x)
 
         return x
@@ -571,12 +670,12 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
-    def forward(self, x, x_size, emb):
+    def forward(self, x, x_size, emb, img_feature, emb_feature):
         for blk in self.blocks:
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x, x_size, emb)
+                x = checkpoint.checkpoint(blk, x, x_size, emb ,img_feature, emb_feature)
             else:
-                x = blk(x, x_size, emb)
+                x = blk(x, x_size, emb, img_feature, emb_feature)
         if self.downsample is not None:
             x = self.downsample(x)
         return x
@@ -655,15 +754,15 @@ class RSTB(nn.Module):
             img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim,
             norm_layer=None)
 
-    def forward(self, x, x_size, emb):
+    def forward(self, x, x_size, emb, img_feature = None, emb_feature=None):
         # return self.patch_embed(self.conv(self.patch_unembed(
         #     self.residual_group(x, x_size) +
         #     self.embeddings_mlp(emb).unsqueeze(1), x_size))) + x
         res = x
-        z = self.residual_group(x, x_size, emb)
-        z = self.patch_unembed(z, x_size, emb)
+        z = self.residual_group(x, x_size, emb,img_feature, emb_feature)
+        z = self.patch_unembed(z, x_size, emb, img_feature, emb_feature)
         z = self.conv(z)
-        z = self.patch_embed(z, emb)
+        z = self.patch_embed(z, emb, img_feature, emb_feature)
         z = z + res
         return z
 
@@ -679,7 +778,7 @@ class RSTB(nn.Module):
 
 
 class PatchEmbed(nn.Module):
-    r""" Image to Patch Embedding
+    """ Image to Patch Embedding
 
     Args:
         img_size (int): Image size.  Default: 224.
@@ -707,10 +806,10 @@ class PatchEmbed(nn.Module):
         else:
             self.norm = None
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, img_feature = None, emb_feature= None):
         x = x.flatten(2).transpose(1, 2)  # B Ph*Pw C
         if self.norm is not None:
-            x = self.norm(x, emb)
+            x = self.norm(x, emb, img_feature, emb_feature)
         return x
 
     def flops(self):
@@ -745,7 +844,7 @@ class PatchUnEmbed(nn.Module):
         self.in_chans = in_chans
         self.embed_dim = embed_dim
 
-    def forward(self, x, x_size, emb):
+    def forward(self, x, x_size, emb,img_feature, emb_feature):
         B, HW, C = x.shape
         x = x.transpose(1, 2).view(B, self.embed_dim, x_size[0], x_size[1])  # B Ph*Pw C
         return x
@@ -852,7 +951,11 @@ class SwinIR(nn.Module):
         self.window_size = window_size
         self.label_embedding = nn.Embedding(num_classes, embed_dim)
         self.emb_mlp = Mlp(2*embed_dim, embed_dim, embed_dim)
-        self.vgg_enc = VGG_ENC()
+        
+        ### ENCODERS - VGG and EMB encoder ###
+        self.vgg_enc = VGG_ENC(img_size=img_size ,embed_dim = embed_dim )
+        self.emb_mlp2 = Mlp(embed_dim, embed_dim, embed_dim)
+
 
         #####################################################################################################
         ################################### 1, shallow feature extraction ###################################
@@ -979,18 +1082,18 @@ class SwinIR(nn.Module):
         x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
         return x
 
-    def forward_features(self, x, emb):
+    def forward_features(self, x, emb, img_feature = None ,emb_feature= None):
         x_size = (x.shape[2], x.shape[3])
-        x = self.patch_embed(x, emb)
+        x = self.patch_embed(x, emb,img_feature,emb_feature)
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
 
         for layer in self.layers:
-            x = layer(x, x_size, emb)
+            x = layer(x, x_size, emb,img_feature, emb_feature )
 
-        x = self.norm(x, emb)  # B L C
-        x = self.patch_unembed(x, x_size, emb)
+        x = self.norm(x, emb,img_feature,emb_feature)  # B L C
+        x = self.patch_unembed(x, x_size, emb,img_feature, emb_feature)
 
         return x
 
@@ -1000,30 +1103,38 @@ class SwinIR(nn.Module):
 
         H, W = x.shape[2:]
         x = self.check_image_size(x)
-        img_fiture = self.vgg_enc(x)
+        
+        
         t = timestep_embedding(t, self.embed_dim)
         y = self.label_embedding(y)
         emb = torch.cat((t,y), 1)
-        emb = self.emb_mlp(emb)
+        
+        emb_feature = self.emb_mlp(emb)
         self.mean = self.mean.type_as(x)
+
+        ### extract feature from image and emb ###
+
+        img_feature = self.vgg_enc(x)
+        emb = self.emb_mlp2(emb_feature)
+       
         # todo: I commented out
         # x = (x - self.mean) * self.img_range
 
         if self.upsampler == 'pixelshuffle':
             # for classical SR
             x = self.conv_first(x)
-            x = self.conv_after_body(self.forward_features(x, emb)) + x
+            x = self.conv_after_body(self.forward_features(x, emb, img_feature, emb_feature )) + x
             x = self.conv_before_upsample(x)
             x = self.conv_last(self.upsample(x))
         elif self.upsampler == 'pixelshuffledirect':
             # for lightweight SR
             x = self.conv_first(x)
-            x = self.conv_after_body(self.forward_features(x, emb)) + x
+            x = self.conv_after_body(self.forward_features(x, emb, img_feature,emb_feature)) + x
             x = self.upsample(x)
         elif self.upsampler == 'nearest+conv':
             # for real-world SR
             x = self.conv_first(x)
-            x = self.conv_after_body(self.forward_features(x, emb)) + x
+            x = self.conv_after_body(self.forward_features(x, emb, img_feature,emb_feature)) + x
             x = self.conv_before_upsample(x)
             x = self.lrelu(self.conv_up1(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
             x = self.lrelu(self.conv_up2(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
@@ -1031,7 +1142,7 @@ class SwinIR(nn.Module):
         else:
             # for image denoising and JPEG compression artifact reduction
             x_first = self.conv_first(x)
-            res = self.conv_after_body(self.forward_features(x_first, emb)) + x_first
+            res = self.conv_after_body(self.forward_features(x_first, emb, img_feature,emb_feature)) + x_first
             #todo: I changed from:
             # x = x + self.conv_last(res)
             # to: (because of the stupid "3 to 6" layers in the "learn sigma"

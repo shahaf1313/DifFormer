@@ -4,7 +4,7 @@ import inspect
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
-from .network_swinir import SwinIR, AdaptiveLayerNormalization, AdaAttN
+from .network_swinir import SwinIR, AdaAttN_v2 #AdaptiveLayerNormalization, AdaAttN,
 from torch import nn
 
 NUM_CLASSES = 1000
@@ -86,7 +86,7 @@ def model_and_diffusion_defaults_transformer():
         drop_rate=0., # default
         attn_drop_rate=0., # default
         drop_path_rate=0.1, # default
-        norm_layer= AdaAttN, # default - nn.LayerNorm,AdaptiveLayerNormalization
+        norm_layer= AdaAttN_v2, # default - nn.LayerNorm,AdaptiveLayerNormalization
         ape=False, # default - interesting to change and check
         patch_norm=True, # default
         use_checkpoint= False, # default
