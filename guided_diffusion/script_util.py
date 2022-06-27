@@ -4,10 +4,10 @@ import inspect
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
-from .network_swinir import SwinIR, AdaAttN_v2 #AdaptiveLayerNormalization, AdaAttN,
+from .network_swinir import SwinIR, AdaAttN_v2, AdaptiveLayerNormalization, AdaAttN_orig #AdaptiveLayerNormalization, AdaAttN,
 from torch import nn
 
-NUM_CLASSES = 1000
+NUM_CLASSES = 200
 
 
 def diffusion_defaults():
@@ -86,7 +86,7 @@ def model_and_diffusion_defaults_transformer():
         drop_rate=0., # default
         attn_drop_rate=0., # default
         drop_path_rate=0.1, # default
-        norm_layer= AdaAttN_v2, # default - nn.LayerNorm,AdaptiveLayerNormalization
+        norm_layer= AdaptiveLayerNormalization, # default - nn.LayerNorm , AdaptiveLayerNormalization , AdaAttN_v2, AdaAttN_orig
         ape=False, # default - interesting to change and check
         patch_norm=True, # default
         use_checkpoint= False, # default
@@ -96,7 +96,8 @@ def model_and_diffusion_defaults_transformer():
         resi_connection='1conv', # default
         learn_sigma=True, # I added - chooses wheter to output 3 or 6 channels
         class_cond_swin=True,
-        num_classes_swin=1000, #Number of classes in the current dataset
+        num_classes_swin=NUM_CLASSES, #Number of classes in the current dataset
+        use_fp16= False 
     )
     res.update(diffusion_defaults())
     return res
@@ -110,6 +111,7 @@ def create_model_and_diffusion_transformer(
     predict_xstart,
     rescale_timesteps,
     rescale_learned_sigmas,
+    use_fp16,
     # Model Parameters:
     image_size_swin,
     patch_size=1, # default
@@ -134,8 +136,42 @@ def create_model_and_diffusion_transformer(
     learn_sigma=True, # I added - chooses whether to output 3 or 6 channels (don't k
     class_cond_swin=True, # Future use: implement unconditional model
     num_classes_swin=NUM_CLASSES, #Number of classes in the current dataset
-
+    p2_gamma = 0.5,
+    p2_k = 1
 ):
+    print("p2 version")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+    print("################################")
+
     model = SwinIR(img_size=image_size_swin,
                    patch_size=patch_size,
                    embed_dim=embed_dim,
@@ -157,7 +193,8 @@ def create_model_and_diffusion_transformer(
                    upsampler=upsampler,
                    resi_connection=resi_connection,
                    learn_sigma=learn_sigma,
-                   num_classes=num_classes_swin
+                   num_classes=num_classes_swin,
+                   use_fp16 = use_fp16
                    )
 
     diffusion = create_gaussian_diffusion(
@@ -169,6 +206,8 @@ def create_model_and_diffusion_transformer(
         rescale_timesteps=rescale_timesteps,
         rescale_learned_sigmas=rescale_learned_sigmas,
         timestep_respacing=timestep_respacing,
+        p2_gamma=p2_gamma,
+        p2_k=p2_k
     )
     return model, diffusion
 
@@ -496,6 +535,8 @@ def create_gaussian_diffusion(
     rescale_timesteps=False,
     rescale_learned_sigmas=False,
     timestep_respacing="",
+    p2_gamma =0,
+    p2_k =1
 ):
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:

@@ -10,6 +10,8 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from .nn import timestep_embedding
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
+from .fp16_util import convert_module_to_f16, convert_module_to_f32
+
 
 class VGG_ENC(nn.Module):
     def __init__(self, img_size = 64, embed_dim = 96):
@@ -185,7 +187,7 @@ class AdaptiveLayerNormalization(nn.Module):
             nn.GELU()
         )
 
-    def forward(self, input, embeddings):
+    def forward(self, input, embeddings, empty1, empty2):
         norm = self.norm(input)
         shared = self.shared(embeddings)
         scale = self.scale(shared)
@@ -268,31 +270,26 @@ class AdaAttN_v2(nn.Module):
         self.h = nn.Conv1d(in_planes, in_planes, 1)
         self.sm = nn.Softmax(dim=-1)
         self.max_sample = max_sample
-        self.norm = nn.LayerNorm([in_planes,4096], elementwise_affine=False)
-        self.norm_key1 = nn.LayerNorm([key_planes,4096], elementwise_affine=False)
-        self.norm_key2 = nn.LayerNorm([key_planes,1], elementwise_affine=False)
+        
+        self.norm1 = nn.LayerNorm(in_planes, elementwise_affine=False)
+        
+        # trying with less normelize 10.5
+        # self.norm = nn.LayerNorm([in_planes,4096], elementwise_affine=False)
+        # self.norm_key1 = nn.LayerNorm([key_planes,4096], elementwise_affine=False)
+        # self.norm_key2 = nn.LayerNorm([key_planes,1], elementwise_affine=False)
 
     def forward(self, content, style,f_cx,f_sx):
-    
-        content = content.permute(0,2,1).contiguous()
+        content_norm = self.norm1(content) # add in 10.5
+        content_norm = content_norm.permute(0,2,1).contiguous()
+        
         style = style.unsqueeze(dim=-1)
         f_sx = f_sx.unsqueeze(dim=-1)
 
-        # Small encoder to extract shallow and deep features
-        # content1 = self.shared_enc1(content)
-        # content2 = self.shared_enc1(content1)
-        # f_c = self.shared_enc1(content2)
-        
-        # style1 = self.shared_enc1(style)
-        # style2 = self.shared_enc1(style1)
-        # f_s = self.shared_enc1(style2)
+        #Q = self.f(self.norm_key1(f_cx)) # add in 10.5
+        Q = self.f(f_cx)    
+        # K = self.g(self.norm_key2 (f_sx)) # add in 10.5
+        K = self.g(f_sx)
 
-        # f_cx = torch.cat((content1, content2, f_c),dim=1)
-        # f_sx = torch.cat((style1, style2, f_s),dim = 1)
-
-
-        Q = self.f(self.norm_key1(f_cx))
-        K = self.g(self.norm_key2 (f_sx))
         V = self.h(style)                                                     # V shape: C x HsWs
         
         # To Check- 
@@ -302,9 +299,74 @@ class AdaAttN_v2(nn.Module):
         # TO Chek- the relu can teturn all values 0 
         std = torch.sqrt(torch.relu(torch.bmm(V**2, A_trans) - mean ** 2))  # S shape: C x HcWc
        
-        calc = std * self.norm(content) + mean
+        calc = std * content_norm + mean
 
         return calc.permute(0,2,1).contiguous()
+
+def calc_mean_std(feat, eps=1e-5):
+    # eps is a small value added to the variance to avoid divide-by-zero.
+    size = feat.size()
+    assert (len(size) == 4)
+    N, C = size[:2]
+    feat_var = feat.view(N, C, -1).var(dim=2) + eps
+    feat_std = feat_var.sqrt().view(N, C, 1, 1)
+    feat_mean = feat.view(N, C, -1).mean(dim=2).view(N, C, 1, 1)
+    return feat_mean, feat_std
+
+def mean_variance_norm(feat):
+    size = feat.size()
+    mean, std = calc_mean_std(feat)
+    normalized_feat = (feat - mean.expand(size)) / std.expand(size)
+    return normalized_feat
+
+class AdaAttN_orig(nn.Module):
+
+    def __init__(self, in_planes, max_sample=256 * 256, key_planes=None):
+        super(AdaAttN_orig, self).__init__()
+        if key_planes is None:
+            key_planes = in_planes
+        self.f = nn.Conv2d(key_planes, key_planes, (1, 1))
+        self.g = nn.Conv2d(key_planes, key_planes, (1, 1))
+        self.h = nn.Conv2d(in_planes, in_planes, (1, 1))
+        self.sm = nn.Softmax(dim=-1)
+        self.max_sample = max_sample
+
+    def forward(self, content, style, content_key, style_key, seed=None):
+        ##### add
+        content = content.permute(0,2,1).reshape(-1, 180, 64, 64).contiguous()
+        content_key = content_key.view(-1, 180, 64, 64).contiguous()
+        style = style.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        style_key = style_key.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        
+        #### origin 
+        F = self.f(content_key)
+        G = self.g(style_key)
+        H = self.h(style)
+        b, _, h_g, w_g = G.size()
+        G = G.view(b, -1, w_g * h_g).contiguous()
+        if w_g * h_g > self.max_sample:
+            if seed is not None:
+                torch.manual_seed(seed)
+            index = torch.randperm(w_g * h_g).to(content.device)[:self.max_sample]
+            G = G[:, :, index]
+            style_flat = H.view(b, -1, w_g * h_g)[:, :, index].transpose(1, 2).contiguous()
+        else:
+            style_flat = H.view(b, -1, w_g * h_g).transpose(1, 2).contiguous()
+        b, _, h, w = F.size()
+        F = F.view(b, -1, w * h).permute(0, 2, 1)
+        S = torch.bmm(F, G)
+        # S: b, n_c, n_s
+        S = self.sm(S)
+        # mean: b, n_c, c
+        mean = torch.bmm(S, style_flat)
+        # std: b, n_c, c
+        std = torch.sqrt(torch.relu(torch.bmm(S, style_flat ** 2) - mean ** 2))
+        # mean, std: b, c, h, w
+        mean = mean.view(b, h, w, -1).permute(0, 3, 1, 2).contiguous()
+        std = std.view(b, h, w, -1).permute(0, 3, 1, 2).contiguous()
+        calc = std * mean_variance_norm(content) + mean
+
+        return calc.view(b,-1,4096).permute(0,2,1).contiguous()
 
 def window_partition(x, window_size):
     """
@@ -934,7 +996,7 @@ class SwinIR(nn.Module):
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
                  use_checkpoint=False, upscale=2, img_range=1., upsampler='',
-                 resi_connection='1conv', learn_sigma=False, num_classes=1000,
+                 resi_connection='1conv', learn_sigma=False, num_classes=1000, use_fp16=False,
                  **kwargs):
         super(SwinIR, self).__init__()
         num_in_ch = in_chans
@@ -953,8 +1015,9 @@ class SwinIR(nn.Module):
         self.emb_mlp = Mlp(2*embed_dim, embed_dim, embed_dim)
         
         ### ENCODERS - VGG and EMB encoder ###
-        self.vgg_enc = VGG_ENC(img_size=img_size ,embed_dim = embed_dim )
-        self.emb_mlp2 = Mlp(embed_dim, embed_dim, embed_dim)
+        if norm_layer.__name__ == 'AdaAttN_v2' or norm_layer.__name__ == 'AdaAttN_orig':
+            self.vgg_enc = VGG_ENC(img_size=img_size ,embed_dim = embed_dim )
+            self.emb_mlp2 = Mlp(embed_dim, embed_dim, embed_dim)
 
 
         #####################################################################################################
@@ -1015,6 +1078,9 @@ class SwinIR(nn.Module):
 
                          )
             self.layers.append(layer)
+        
+        self.dtype = torch.float16 if use_fp16 else torch.float32
+
         self.norm = norm_layer(self.num_features)
 
         # build the last conv layer in deep feature extraction
@@ -1055,6 +1121,45 @@ class SwinIR(nn.Module):
             self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1)
 
         self.apply(self._init_weights)
+    
+    def convert_to_fp16(self):
+        """
+        Convert the torso of the model to float16.
+        """
+        self.label_embedding.apply(convert_module_to_f16)
+        self.emb_mlp.apply(convert_module_to_f16)
+        if self.norm_layer.__name__ == 'AdaAttN_v2' or self.norm_layer.__name__ == 'AdaAttN_orig':
+            self.vgg_enc.apply(convert_module_to_f16)
+            self.emb_mlp2.apply(convert_module_to_f16) 
+        self.num_layers.apply(convert_module_to_f16) 
+        self.embed_dim.apply(convert_module_to_f16) 
+        self.ape.apply(convert_module_to_f16) 
+        self.patch_norm.apply(convert_module_to_f16) 
+        self.num_features.apply(convert_module_to_f16) 
+        self.mlp_ratio.apply(convert_module_to_f16) 
+        # split image into non-overlapping patches
+        self.patch_embed.apply(convert_module_to_f16) 
+        self.patches_resolution.apply(convert_module_to_f16)
+
+        # merge non-overlapping patches into image
+        self.patch_unembed.apply(convert_module_to_f16)
+
+        # absolute position embedding
+        if self.ape:
+            self.absolute_pos_embed.apply(convert_module_to_f16)
+        self.pos_drop.apply(convert_module_to_f16)
+        self.conv_first.apply(convert_module_to_f16)
+        self.layers.apply(convert_module_to_f16)
+        self.norm.apply(convert_module_to_f16)
+        self.conv_after_body.apply(convert_module_to_f16)
+        self.conv_last.apply(convert_module_to_f16)
+        
+    def convert_to_fp32(self):
+        """
+        Convert the torso of the model to float32.
+        """
+        self.layers.apply(convert_module_to_f32)
+        
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -1104,21 +1209,34 @@ class SwinIR(nn.Module):
         H, W = x.shape[2:]
         x = self.check_image_size(x)
         
+        # t = t.type(self.dtype)
+        # y = y.type(self.dtype)
+        # x = x.type(self.dtype)
+
         
         t = timestep_embedding(t, self.embed_dim)
         y = self.label_embedding(y)
+        
+
         emb = torch.cat((t,y), 1)
         
         emb_feature = self.emb_mlp(emb)
         self.mean = self.mean.type_as(x)
 
         ### extract feature from image and emb ###
-
-        img_feature = self.vgg_enc(x)
-        emb = self.emb_mlp2(emb_feature)
-       
+        if self.norm.__class__.__name__ == 'AdaAttN_v2' or self.norm.__class__.__name__ == 'AdaAttN_orig':
+            img_feature = self.vgg_enc(x)
+            emb = self.emb_mlp2(emb_feature)
+        else:
+            emb = emb_feature
+            img_feature = None
+            emb_feature = None
         # todo: I commented out
         # x = (x - self.mean) * self.img_range
+
+        
+
+
 
         if self.upsampler == 'pixelshuffle':
             # for classical SR

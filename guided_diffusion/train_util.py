@@ -7,7 +7,7 @@ import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
-
+import torch
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
@@ -68,14 +68,14 @@ class TrainLoop:
         self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
             model=self.model,
-            use_fp16=self.use_fp16,
+            use_fp16= use_fp16 , # TODO - change from hardcoded
             fp16_scale_growth=fp16_scale_growth,
         )
 
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
-        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[800000, 1200000, 1400000, 1500000, 1600000], gamma=0.5)
+        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[500000,900000, 1200000, 1400000, 1500000, 1600000], gamma=0.5)
 
         if self.resume_step:
             self._load_optimizer_state()
@@ -100,7 +100,7 @@ class TrainLoop:
                 output_device=dist_util.dev(),
                 broadcast_buffers=False,
                 bucket_cap_mb=128,
-                find_unused_parameters=True,
+                find_unused_parameters=False,
             )
         else:
             if dist.get_world_size() > 1:
@@ -175,15 +175,19 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
-        took_step = self.mp_trainer.optimize(self.opt)
+        scaler = torch.cuda.amp.GradScaler()
+
+        self.forward_backward(batch, cond, scaler)
+        took_step = self.mp_trainer.optimize(self.opt, scaler)
         if took_step:
             self._update_ema()
             self.scheduler.step()
         self._anneal_lr()
         self.log_step()
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, scaler):
+        
+
         self.mp_trainer.zero_grad()
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
@@ -193,31 +197,32 @@ class TrainLoop:
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
-
-            compute_losses = functools.partial(
-                self.diffusion.training_losses,
-                self.ddp_model,
-                micro,
-                t,
-                model_kwargs=micro_cond,
-            )
-
-            if last_batch or not self.use_ddp:
-                losses = compute_losses()
-            else:
-                with self.ddp_model.no_sync():
-                    losses = compute_losses()
-
-            if isinstance(self.schedule_sampler, LossAwareSampler):
-                self.schedule_sampler.update_with_local_losses(
-                    t, losses["loss"].detach()
+            with torch.cuda.amp.autocast():
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses,
+                    self.ddp_model,
+                    micro,
+                    t,
+                    model_kwargs=micro_cond,
                 )
 
-            loss = (losses["loss"] * weights).mean()
+                if last_batch or not self.use_ddp:
+                    losses = compute_losses()
+                else:
+                    with self.ddp_model.no_sync():
+                        losses = compute_losses()
+
+                if isinstance(self.schedule_sampler, LossAwareSampler):
+                    self.schedule_sampler.update_with_local_losses(
+                        t, losses["loss"].detach()
+                    )
+
+                loss = (losses["loss"] * weights).mean()
+            
             log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
-            self.mp_trainer.backward(loss)
+            self.mp_trainer.backward(loss, scaler)
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
