@@ -178,8 +178,10 @@ class MixedPrecisionTrainer:
             loss_scale = 2 ** self.lg_loss_scale
             (loss * loss_scale).backward()
         else:
-            # loss.backward()
-            scaler.scale(loss).backward()
+            if scaler == None: 
+                loss.backward()
+            else: # use AMP
+                scaler.scale(loss).backward()
 
     def optimize(self, opt: th.optim.Optimizer, scaler):
         if self.use_fp16:
@@ -213,11 +215,14 @@ class MixedPrecisionTrainer:
         logger.logkv_mean("param_norm", param_norm)
         
         # Grad cliping with AMP
-        scaler.unscale_(opt)
-        th.nn.utils.clip_grad_norm_(self.model.parameters(), 2500) # TODO - change hard coded
-
-        scaler.step(opt)
-        scaler.update()
+        # scaler.unscale_(opt)
+        # th.nn.utils.clip_grad_norm_(self.model.parameters(), 2500) # TODO - change hard coded
+        if scaler == None:
+            opt.step()
+        else:
+            scaler.step(opt)
+            scaler.update()
+        
         return True
 
     def _compute_norms(self, grad_scale=1.0):

@@ -70,6 +70,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        use_amp = args.use_amp
     ).run_loop()
 
 def create_argparser():
@@ -86,7 +87,8 @@ def create_argparser():
         save_interval=10000,
         resume_checkpoint="",
         use_fp16=False,
-        fp16_scale_growth=1e-3
+        fp16_scale_growth=1e-3,
+        use_amp = False
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(model_and_diffusion_defaults_transformer())

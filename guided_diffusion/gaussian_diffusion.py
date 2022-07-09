@@ -13,7 +13,7 @@ import torch as th
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
-
+from . import logger
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
@@ -172,7 +172,11 @@ class GaussianDiffusion:
          
         # P2 weighting
         self.p2_gamma = p2_gamma
-        self.p2_k = p2_k
+        self.p2_k = p2_k        
+        logger.log(f"P2_gamma:  {self.p2_gamma}")
+        logger.log(f"P2_k:  {self.p2_k}")
+
+        
         self.snr = 1.0 / (1 - self.alphas_cumprod) - 1
 
     def q_mean_variance(self, x_start, t):

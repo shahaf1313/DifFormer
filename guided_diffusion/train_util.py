@@ -38,7 +38,9 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        use_amp = False
     ):
+        self.use_amp = use_amp
         self.model = model
         self.diffusion = diffusion
         self.data = data
@@ -75,7 +77,7 @@ class TrainLoop:
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
-        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[500000,900000, 1200000, 1400000, 1500000, 1600000], gamma=0.5)
+        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[1200000, 1400000, 1500000, 1600000], gamma=0.5)
 
         if self.resume_step:
             self._load_optimizer_state()
@@ -175,7 +177,10 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        scaler = torch.cuda.amp.GradScaler()
+        if self.use_amp:
+            scaler = torch.cuda.amp.GradScaler()
+        else:
+            scaler = None
 
         self.forward_backward(batch, cond, scaler)
         took_step = self.mp_trainer.optimize(self.opt, scaler)
@@ -197,14 +202,40 @@ class TrainLoop:
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
-            with torch.cuda.amp.autocast():
-                compute_losses = functools.partial(
-                    self.diffusion.training_losses,
-                    self.ddp_model,
-                    micro,
-                    t,
-                    model_kwargs=micro_cond,
+            if scaler != None: 
+                with torch.cuda.amp.autocast():
+                    compute_losses = functools.partial(
+                        self.diffusion.training_losses,
+                        self.ddp_model,
+                        micro,
+                        t,
+                        model_kwargs=micro_cond,
+                    )
+
+                    if last_batch or not self.use_ddp:
+                        losses = compute_losses()
+                    else:
+                        with self.ddp_model.no_sync():
+                            losses = compute_losses()
+
+                    if isinstance(self.schedule_sampler, LossAwareSampler):
+                        self.schedule_sampler.update_with_local_losses(
+                            t, losses["loss"].detach()
+                        )
+
+                    loss = (losses["loss"] * weights).mean()
+                
+                log_loss_dict(
+                    self.diffusion, t, {k: v * weights for k, v in losses.items()}
                 )
+                self.mp_trainer.backward(loss, scaler)
+            else: 
+                compute_losses = functools.partial(
+                        self.diffusion.training_losses,
+                        self.ddp_model,
+                        micro,
+                        t,
+                        model_kwargs=micro_cond,)
 
                 if last_batch or not self.use_ddp:
                     losses = compute_losses()
@@ -219,10 +250,10 @@ class TrainLoop:
 
                 loss = (losses["loss"] * weights).mean()
             
-            log_loss_dict(
-                self.diffusion, t, {k: v * weights for k, v in losses.items()}
-            )
-            self.mp_trainer.backward(loss, scaler)
+                log_loss_dict(
+                    self.diffusion, t, {k: v * weights for k, v in losses.items()}
+                )
+                self.mp_trainer.backward(loss, scaler)
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):

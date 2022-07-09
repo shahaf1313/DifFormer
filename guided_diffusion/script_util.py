@@ -7,7 +7,7 @@ from .unet import SuperResModel, UNetModel, EncoderUNetModel
 from .network_swinir import SwinIR, AdaAttN_v2, AdaptiveLayerNormalization, AdaAttN_orig #AdaptiveLayerNormalization, AdaAttN,
 from torch import nn
 
-NUM_CLASSES = 200
+NUM_CLASSES = 1000
 
 
 def diffusion_defaults():
@@ -137,40 +137,12 @@ def create_model_and_diffusion_transformer(
     class_cond_swin=True, # Future use: implement unconditional model
     num_classes_swin=NUM_CLASSES, #Number of classes in the current dataset
     p2_gamma = 0.5,
-    p2_k = 1
+    p2_k = 1,
+    use_amp = False
 ):
     print("p2 version")
     print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
-    print("################################")
+  
 
     model = SwinIR(img_size=image_size_swin,
                    patch_size=patch_size,
@@ -564,6 +536,8 @@ def create_gaussian_diffusion(
         ),
         loss_type=loss_type,
         rescale_timesteps=rescale_timesteps,
+        p2_gamma = p2_gamma,
+        p2_k = p2_k
     )
 
 
