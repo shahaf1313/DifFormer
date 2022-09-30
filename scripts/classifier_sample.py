@@ -41,11 +41,13 @@ def main():
     for argument in vars(args):
         logger.log(argument + ': ' + str(getattr(args, argument)))
     logger.log("creating model and diffusion...")
+    
     if args.use_transformer:
         model, diffusion = create_model_and_diffusion_transformer(
             **args_to_dict(args, model_and_diffusion_defaults_transformer().keys())
         )
     else:
+        print("############@@@@")
         model, diffusion = create_model_and_diffusion(
             **args_to_dict(args, model_and_diffusion_defaults().keys())
         )

@@ -123,7 +123,7 @@ class GaussianDiffusion:
         model_var_type,
         loss_type,
         rescale_timesteps=False,
-        p2_gamma=0,
+        p2_gamma=0.5,
         p2_k=1
     ):
         self.model_mean_type = model_mean_type

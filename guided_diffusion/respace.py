@@ -83,7 +83,7 @@ class SpacedDiffusion(GaussianDiffusion):
                 last_alpha_cumprod = alpha_cumprod
                 self.timestep_map.append(i)
         kwargs["betas"] = np.array(new_betas)
-        super().__init__(**kwargs)
+        super().__init__(**kwargs,p2_gamma=p2_gamma, p2_k=p2_k )
 
     def p_mean_variance(
         self, model, *args, **kwargs

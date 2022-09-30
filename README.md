@@ -1,3 +1,27 @@
+# Project DifFormer insturction- Amit Shomer
+In this part all commands for running, traind and sample for DifFormer will be explained. 
+
+## Train DifFormer
+In order to train the models with DifFormer run on ImageNet 64x64: 
+```
+mpirun -np 2 python scripts/image_train.py --image_size 64 --learn_sigma True --class_cond True --diffusion_steps 1000 --noise_schedule cosine --rescale_learned_sigmas False --rescale_timesteps False --lr 2e-4 --batch_size 23 --data_dir /data/dataset/imagenet/ILSVRC/Data/CLS-LOC/train/ --gpus 6 7 --use_transformer
+```
+
+## Sample DifFormer
+In order to sample the model with the Classifier guidance please run: 
+```
+python scripts/classifier_sample.py --class_cond True --diffusion_steps 1000 --image_size 64 --learn_sigma True --noise_schedule cosine --classifier_scale 1.0 --classifier_path pretrained_models/64x64_classifier.pt --classifier_depth 4 --model_path runs/2022-04-30-21-24-32-GPU6/ema_0.9999_410000.pt --batch_size 200 --num_samples 200 --timestep_respacing 250 --use_transformer --gpus 7
+```
+
+## Evaluatuing Sample
+cd evaluations folder and run: 
+```
+python evaluator.py ../pretrained_models/VIRTUAL_imagenet64_labeled.npz /home/amit/DifFormer/samples 2022-09-16-12-51-56-GPU7/samples_1000x64x64x3.npz
+```
+make sure you have the baseline data from ImageNet which called "VIRTUAL_imagenet64_labeled.npz". It can be found at the orignal Github of [improved-diffusion](https://github.com/openai/improved-diffusion)
+
+
+# From that point, this is the original README file of "Diffusion Models Beat GANS on Image Synthesis" which you may find useful. 
 # guided-diffusion
 
 This is the codebase for [Diffusion Models Beat GANS on Image Synthesis](http://arxiv.org/abs/2105.05233).

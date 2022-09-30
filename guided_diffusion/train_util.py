@@ -77,7 +77,7 @@ class TrainLoop:
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
         )
-        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[1200000, 1400000, 1500000, 1600000], gamma=0.5)
+        self.scheduler = lr_scheduler.MultiStepLR(self.opt, milestones=[1200000, 1500000, 1600000], gamma=0.5)
 
         if self.resume_step:
             self._load_optimizer_state()

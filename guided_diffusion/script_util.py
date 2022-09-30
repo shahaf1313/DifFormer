@@ -78,8 +78,11 @@ def model_and_diffusion_defaults_transformer():
         patch_size=1, # default
         embed_dim=180, # default
         depths= [6, 6, 6, 6, 6, 6], # default - lightweight definition
+        # depths= [2,2,6,6,2], # default - lightweight definition
         num_heads_swin= [6, 6, 6, 6, 6, 6], #default - lightweight definition
-        window_size= 8, # changed to 8 because the is not divisible by 7 (64x64 for now). default - 7
+
+
+        window_size= 4, # changed to 8 because the is not divisible by 7 (64x64 for now). default - 7
         mlp_ratio = 2, # followed by the configuration of SwinIR denoiser. default -4
         qkv_bais = True, # default
         qk_scale= None, # default
@@ -136,7 +139,7 @@ def create_model_and_diffusion_transformer(
     learn_sigma=True, # I added - chooses whether to output 3 or 6 channels (don't k
     class_cond_swin=True, # Future use: implement unconditional model
     num_classes_swin=NUM_CLASSES, #Number of classes in the current dataset
-    p2_gamma = 0.5,
+    p2_gamma = 1,
     p2_k = 1,
     use_amp = False
 ):
